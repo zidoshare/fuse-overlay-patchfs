@@ -63,4 +63,55 @@ int safe_openat (int dirfd, const char *pathname, int flags, mode_t mode);
 
 int override_mode (struct ovl_layer *l, int fd, const char *abs_path, const char *path, struct stat *st);
 
+enum units {
+    BYTES = 1L,
+    KILOBYTES = 1024L,
+    MEGABYTES = 1048576L,
+    GIGABYTES = 1073741824L,
+    TERABYTES = 1099511627776L
+};
+
+enum units char_to_units(const char c);
+
+int quota_set(const char *path, unsigned long size, enum units unit);
+
+long double quota_get(const char *path, enum units unit);
+
+long incr_size(const char *path, long s);
+
+long quota_exceeded(const char *path);
+
+void quota_unset(const char *path);
+
+int limited(const char *path);
+
+#define BYTES_IN_KILOBYTE 1024.0L
+#define BYTES_IN_MEGABYTE 1048576.0L
+#define BYTES_IN_GIGABYTE 1073741824.0L
+#define BYTES_IN_TERABYTE 1099511627776.0L
+
+long entry_size(const char *path);
+
+ssize_t space(const char *path);
+
+// 初始化
+void
+local_xattr_db_init(const char* db_parent_path, const char* mount_base_dir);
+
+void
+local_xattr_db_release();
+
+int
+local_set_xattr(const char* path,
+                const char* name,
+                const char* value,
+                size_t size,
+                int flags);
+int
+local_get_xattr(const char* path, const char* name, char* value, size_t size);
+int
+local_list_xattr(const char* path, char* list, size_t size);
+int
+local_remove_xattr(const char* path, const char* name);
+
 #endif
