@@ -30,8 +30,6 @@
 #include <fcntl.h>
 #include <errno.h>
 
-#include <sys/xattr.h>
-
 #include "utils.h"
 
 static int
@@ -57,7 +55,7 @@ direct_getxattr (struct ovl_layer *l, const char *path, const char *name, char *
 
   strconcat3 (full_path, PATH_MAX, l->path, "/", path);
 
-  return lgetxattr (full_path, name, buf, size);
+  return ulgetxattr (full_path, name, buf, size);
 }
 
 static int
@@ -175,11 +173,11 @@ direct_load_data_source (struct ovl_layer *l, const char *opaque, const char *pa
       return l->fd;
     }
 
-  if (fgetxattr (l->fd, XATTR_PRIVILEGED_OVERRIDE_STAT, tmp, sizeof (tmp)) >= 0)
+  if (ufgetxattr (l->fd, XATTR_PRIVILEGED_OVERRIDE_STAT, tmp, sizeof (tmp)) >= 0)
     l->stat_override_mode = STAT_OVERRIDE_PRIVILEGED;
-  else if (fgetxattr (l->fd, XATTR_OVERRIDE_STAT, tmp, sizeof (tmp)) >= 0)
+  else if (ufgetxattr (l->fd, XATTR_OVERRIDE_STAT, tmp, sizeof (tmp)) >= 0)
     l->stat_override_mode = STAT_OVERRIDE_USER;
-  else if (fgetxattr (l->fd, XATTR_OVERRIDE_CONTAINERS_STAT, tmp, sizeof (tmp)) >= 0)
+  else if (ufgetxattr (l->fd, XATTR_OVERRIDE_CONTAINERS_STAT, tmp, sizeof (tmp)) >= 0)
     l->stat_override_mode = STAT_OVERRIDE_CONTAINERS;
 
   return 0;

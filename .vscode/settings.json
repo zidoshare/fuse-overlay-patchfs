@@ -1,0 +1,10 @@
+{
+    "files.associations": {
+        "*.yaml": "yaml",
+        "*.yml": "yaml",
+        "file.h": "c",
+        "features.h": "c",
+        "utils.h": "c",
+        "config.h": "c"
+    }
+}

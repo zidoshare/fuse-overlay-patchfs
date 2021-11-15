@@ -32,6 +32,7 @@
 # include <sys/types.h>
 # include <fcntl.h>
 # include "fuse-overlayfs.h"
+# include <sys/file.h>
 
 # define XATTR_OVERRIDE_STAT "user.fuseoverlayfs.override_stat"
 # define XATTR_PRIVILEGED_OVERRIDE_STAT "security.fuseoverlayfs.override_stat"
@@ -95,23 +96,46 @@ long entry_size(const char *path);
 ssize_t space(const char *path);
 
 // 初始化
-void
-local_xattr_db_init(const char* db_parent_path, const char* mount_base_dir);
+void local_xattr_db_init(const char* db_parent_path, const char* mount_base_dir);
 
-void
-local_xattr_db_release();
+void local_xattr_db_release();
 
-int
-local_set_xattr(const char* path,
-                const char* name,
-                const char* value,
-                size_t size,
-                int flags);
-int
-local_get_xattr(const char* path, const char* name, char* value, size_t size);
-int
-local_list_xattr(const char* path, char* list, size_t size);
-int
-local_remove_xattr(const char* path, const char* name);
+
+int local_set_xattr(ino_t ino, const char *name, const void *value,
+	 size_t size, int flags);
+
+int ulsetxattr(const char* path,
+           const char* name,
+           const char* value,
+           size_t size,
+           int flags);
+
+int ufsetxattr(int fd, const char *name,
+                  const void *value, size_t size, int flags);
+
+int ulsetxattr(const char* path,
+           const char* name,
+           const char* value,
+           size_t size,
+           int flags);
+
+ssize_t ufgetxattr(int fd, const char *name,
+                  void *value, size_t size);
+
+ssize_t ulgetxattr(const char* path, const char* name, char* value, size_t size);
+
+ssize_t ugetxattr(const char* path, const char* name, char* value, size_t size);
+
+ssize_t uflistxattr(int fd, char *list, size_t size);
+
+ssize_t ullistxattr(const char* path, char* list, size_t size);
+
+ssize_t ulistxattr(const char* path, char* list, size_t size);
+
+int ufremovexattr(int fd, const char *name);
+
+int uremovexattr(const char* path, const char* name);
+
+int ulremovexattr(const char* path, const char* name);
 
 #endif
