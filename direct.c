@@ -43,17 +43,9 @@ direct_file_exists (struct ovl_layer *l, const char *pathname)
 static int
 direct_listxattr (struct ovl_layer *l, const char *path, char *buf, size_t size)
 {
-  cleanup_close int fd = -1;
   char full_path[PATH_MAX];
-  int ret;
 
-  full_path[0] = '\0';
-  ret = open_fd_or_get_path (l, path, full_path, &fd, O_RDONLY);
-  if (ret < 0)
-    return ret;
-
-  if (fd >= 0)
-    return flistxattr (fd, buf, size);
+  strconcat3 (full_path, PATH_MAX, l->path, "/", path);
 
   return llistxattr (full_path, buf, size);
 }
@@ -61,17 +53,9 @@ direct_listxattr (struct ovl_layer *l, const char *path, char *buf, size_t size)
 static int
 direct_getxattr (struct ovl_layer *l, const char *path, const char *name, char *buf, size_t size)
 {
-  cleanup_close int fd = -1;
   char full_path[PATH_MAX];
-  int ret;
 
-  full_path[0] = '\0';
-  ret = open_fd_or_get_path (l, path, full_path, &fd, O_RDONLY);
-  if (ret < 0)
-    return ret;
-
-  if (fd >= 0)
-    return fgetxattr (fd, name, buf, size);
+  strconcat3 (full_path, PATH_MAX, l->path, "/", path);
 
   return lgetxattr (full_path, name, buf, size);
 }
@@ -84,8 +68,7 @@ direct_fstat (struct ovl_layer *l, int fd, const char *path, unsigned int mask, 
   struct statx stx;
 
   ret = statx (fd, "", AT_STATX_DONT_SYNC|AT_EMPTY_PATH, mask, &stx);
-
-  if (ret < 0 && errno == ENOSYS)
+  if (ret < 0 && (errno == ENOSYS || errno == EINVAL))
     goto fallback;
   if (ret == 0)
     {
@@ -112,8 +95,7 @@ direct_statat (struct ovl_layer *l, const char *path, struct stat *st, int flags
   struct statx stx;
 
   ret = statx (l->fd, path, AT_STATX_DONT_SYNC|flags, mask, &stx);
-
-  if (ret < 0 && errno == ENOSYS)
+  if (ret < 0 && (errno == ENOSYS || errno == EINVAL))
     goto fallback;
   if (ret == 0)
     {

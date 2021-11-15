@@ -427,6 +427,9 @@ ovl_init (void *userdata, struct fuse_conn_info *conn)
   if ((conn->capable & FUSE_CAP_WRITEBACK_CACHE) == 0)
     lo->writeback = 0;
 
+  if (conn->capable & FUSE_CAP_POSIX_ACL)
+    conn->want |= FUSE_CAP_POSIX_ACL;
+
   conn->want |= FUSE_CAP_DONT_MASK | FUSE_CAP_SPLICE_READ | FUSE_CAP_SPLICE_WRITE | FUSE_CAP_SPLICE_MOVE;
   if (lo->writeback)
     conn->want |= FUSE_CAP_WRITEBACK_CACHE;
@@ -1064,6 +1067,10 @@ hide_node (struct ovl_data *lo, struct ovl_node *node, bool unlink_src)
           if (ret)
             needs_whiteout = true;
         }
+
+      // if the parent directory is opaque, there's no need to put a whiteout in it.
+      if (node->parent != NULL)
+        needs_whiteout = needs_whiteout && (is_directory_opaque(get_upper_layer(lo), node->parent->path) < 1);
 
       if (needs_whiteout)
         {
@@ -2479,7 +2486,6 @@ static ssize_t
 filter_xattrs_list (char *buf, ssize_t len)
 {
   ssize_t ret = 0;
-  size_t i = 0;
   char *it;
 
   if (buf == NULL)
@@ -2518,7 +2524,6 @@ ovl_listxattr (fuse_req_t req, fuse_ino_t ino, size_t size)
   struct ovl_node *node;
   struct ovl_data *lo = ovl_data (req);
   cleanup_free char *buf = NULL;
-  size_t i;
   int ret;
 
   if (UNLIKELY (ovl_debug (req)))
@@ -2974,6 +2979,8 @@ copyup (struct ovl_data *lo, struct ovl_node *node)
   mode = st.st_mode;
   if (lo->xattr_permissions)
     mode |= 0755;
+  if (lo->euid > 0)
+    mode |= 0200;
 
   if ((mode & S_IFMT) == S_IFDIR)
     {
@@ -4446,7 +4453,6 @@ ovl_rename_direct (fuse_req_t req, fuse_ino_t parent, const char *name,
   struct ovl_node *pnode, *node, *destnode, *destpnode;
   struct ovl_data *lo = ovl_data (req);
   int ret;
-  int saved_errno;
   cleanup_close int srcfd = -1;
   cleanup_close int destfd = -1;
   struct ovl_node key;
@@ -5513,6 +5519,7 @@ main (int argc, char *argv[])
                         .squash_to_gid = -1,
                         .static_nlink = 0,
                         .xattr_permissions = 0,
+                        .euid = geteuid (),
                         .timeout = 1000000000.0,
                         .timeout_str = NULL,
                         .writeback = 1,

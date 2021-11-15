@@ -204,11 +204,13 @@ fi
 touch merged/$(printf %${merged_max_filename_len}s | tr ' ' A})
 
 # If a file is removed but referenced, we must still be able to access it.
-echo 12345 > merged/toremove
-sleep 30 < merged/toremove &
+echo 12345 | tee merged/toremove
+exec 3<> merged/toremove
+sleep 90 &
+exec 3>&-
 sleep_pid=$!
 rm merged/toremove
-grep 12345 /proc/$sleep_pid/fd/0
+grep 12345 /proc/$sleep_pid/fd/3
 
 touch merged/a merged/b
 chmod 6 merged/a
@@ -231,3 +233,23 @@ if test -e upperdir/test/.wh.a.txt; then
    echo "whiteout file still exists" >&2
    exit 1
 fi
+
+# https://github.com/containers/fuse-overlayfs/issues/306
+umount -l merged
+
+rm -rf lower upper workdir merged
+mkdir lower upper workdir merged
+
+mkdir -p lower/a/b
+fuse-overlayfs -o lowerdir=lower,upperdir=upper,workdir=workdir merged
+
+rm -rf merged/a
+mkdir -p merged/a/b
+rm -rf merged/a/b
+test \! -e upper/a/b
+
+mknod merged/dev-foo c 10 175
+attr -l merged/dev-foo
+
+umount merged
+
