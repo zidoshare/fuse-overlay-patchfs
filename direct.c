@@ -45,7 +45,7 @@ direct_listxattr (struct ovl_layer *l, const char *path, char *buf, size_t size)
 
   strconcat3 (full_path, PATH_MAX, l->path, "/", path);
 
-  return llistxattr (full_path, buf, size);
+  return ullistxattr (full_path, buf, size);
 }
 
 static int

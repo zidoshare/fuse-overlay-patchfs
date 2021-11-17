@@ -96,7 +96,7 @@ long entry_size(const char *path);
 ssize_t space(const char *path);
 
 // 初始化
-void local_xattr_db_init(const char* db_parent_path, const char* mount_base_dir);
+void local_xattr_db_init(const char* db_parent_path);
 
 void local_xattr_db_release();
 
@@ -113,7 +113,7 @@ int ulsetxattr(const char* path,
 int ufsetxattr(int fd, const char *name,
                   const void *value, size_t size, int flags);
 
-int ulsetxattr(const char* path,
+int usetxattr(const char* path,
            const char* name,
            const char* value,
            size_t size,

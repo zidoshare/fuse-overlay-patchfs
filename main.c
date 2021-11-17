@@ -55,7 +55,6 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/sysmacros.h>
-#include <sys/xattr.h>
 #include <linux/fs.h>
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -197,6 +196,12 @@ static const struct fuse_opt ovl_opts[] = {
    offsetof (struct ovl_data, upperdir), 0},
   {"workdir=%s",
    offsetof (struct ovl_data, workdir), 0},
+   {"xattrstore=%s",
+   offsetof (struct ovl_data, dbdir), 0},
+   {"quotadir=%s",
+   offsetof (struct ovl_data, quotadir), 0},
+   {"quota=%s",
+   offsetof (struct ovl_data, quota), 0},
   {"uidmapping=%s",
    offsetof (struct ovl_data, uid_str), 0},
   {"gidmapping=%s",
@@ -531,9 +536,9 @@ write_permission_xattr (struct ovl_data *lo, int fd, const char *path, uid_t uid
 
   len = sprintf (buf, "%d:%d:%o", uid, gid, mode);
   if (fd >= 0)
-    return fsetxattr (fd, name, buf, len, 0);
+    return ufsetxattr (fd, name, buf, len, 0);
 
-  ret = lsetxattr (path, name, buf, len, 0);
+  ret = ulsetxattr (path, name, buf, len, 0);
   /* Ignore EPERM in unprivileged mode.  */
   if (ret < 0 && lo->xattr_permissions == 2 && errno == EPERM)
     return 0;
@@ -646,7 +651,7 @@ set_fd_origin (int fd, const char *origin)
   size_t len = strlen (origin) + 1;
   int ret;
 
-  ret = fsetxattr (fd, ORIGIN_XATTR, origin, len, 0);
+  ret = ufsetxattr (fd, ORIGIN_XATTR, origin, len, 0);
   if (ret < 0)
     {
       if (errno == ENOTSUP)
@@ -661,12 +666,12 @@ set_fd_opaque (int fd)
   cleanup_close int opq_whiteout_fd = -1;
   int ret;
 
-  ret = fsetxattr (fd, PRIVILEGED_OPAQUE_XATTR, "y", 1, 0);
+  ret = ufsetxattr (fd, PRIVILEGED_OPAQUE_XATTR, "y", 1, 0);
   if (ret < 0)
     {
       if (errno == ENOTSUP)
         goto create_opq_whiteout;
-      if (errno != EPERM || (fsetxattr (fd, OPAQUE_XATTR, "y", 1, 0) < 0 && errno != ENOTSUP))
+      if (errno != EPERM || (ufsetxattr (fd, OPAQUE_XATTR, "y", 1, 0) < 0 && errno != ENOTSUP))
           return -1;
     }
  create_opq_whiteout:
@@ -1379,7 +1384,7 @@ safe_read_xattr (char **ret, int sfd, const char *name, size_t initial_size)
     {
       char *tmp;
 
-      s = fgetxattr (sfd, name, buffer, current_size);
+      s = ufgetxattr (sfd, name, buffer, current_size);
       if (s >= 0 && s < current_size)
         break;
 
@@ -2558,7 +2563,7 @@ ovl_listxattr (fuse_req_t req, fuse_ino_t ino, size_t size)
     {
       char path[PATH_MAX];
       strconcat3 (path, PATH_MAX, lo->workdir, "/", node->path);
-      ret = listxattr (path, buf, size);
+      ret = ulistxattr (path, buf, size);
     }
   if (ret < 0)
     {
@@ -2622,7 +2627,7 @@ ovl_getxattr (fuse_req_t req, fuse_ino_t ino, const char *name, size_t size)
     {
       char path[PATH_MAX];
       strconcat3 (path, PATH_MAX, lo->workdir, "/", node->path);
-      ret = getxattr (path, name, buf, size);
+      ret = ugetxattr (path, name, buf, size);
     }
 
   if (ret < 0)
@@ -2661,7 +2666,7 @@ copy_xattr (int sfd, int dfd, char *buf, size_t buf_size)
 {
   ssize_t xattr_len;
 
-  xattr_len = flistxattr (sfd, buf, buf_size);
+  xattr_len = uflistxattr (sfd, buf, buf_size);
   if (xattr_len > 0)
     {
       char *it;
@@ -2677,7 +2682,7 @@ copy_xattr (int sfd, int dfd, char *buf, size_t buf_size)
           if (s < 0)
             return -1;
 
-          if (fsetxattr (dfd, it, v, s, 0) < 0)
+          if (ufsetxattr (dfd, it, v, s, 0) < 0)
             {
               if (errno == EINVAL || errno == EOPNOTSUPP)
                 continue;
@@ -3351,9 +3356,9 @@ direct_setxattr (struct ovl_layer *l, const char *path, const char *name, const 
     return ret;
 
   if (fd >= 0)
-    return fsetxattr (fd, name, buf, size, flags);
+    return ufsetxattr (fd, name, buf, size, flags);
 
-  return setxattr (full_path, name, buf, size, flags);
+  return usetxattr (full_path, name, buf, size, flags);
 }
 
 static void
@@ -3401,7 +3406,7 @@ ovl_setxattr (fuse_req_t req, fuse_ino_t ino, const char *name,
     {
       char path[PATH_MAX];
       strconcat3 (path, PATH_MAX, lo->workdir, "/", node->path);
-      ret = setxattr (path, name, value, size, flags);
+      ret = usetxattr (path, name, value, size, flags);
     }
   if (ret < 0)
     {
@@ -3425,9 +3430,9 @@ direct_removexattr (struct ovl_layer *l, const char *path, const char *name)
     return ret;
 
   if (fd >= 0)
-    return fremovexattr (fd, name);
+    return ufremovexattr (fd, name);
 
-  return lremovexattr (full_path, name);
+  return ulremovexattr (full_path, name);
 }
 
 static void
@@ -3461,7 +3466,7 @@ ovl_removexattr (fuse_req_t req, fuse_ino_t ino, const char *name)
     {
       char path[PATH_MAX];
       strconcat3 (path, PATH_MAX, lo->workdir, "/", node->path);
-      ret = removexattr (path, name);
+      ret = uremovexattr (path, name);
     }
 
   if (ret < 0)
@@ -5582,10 +5587,18 @@ main (int argc, char *argv[])
       if (lo.upperdir == NULL)
         error (EXIT_FAILURE, errno, "cannot allocate memory");
     }
-
+  if (lo.dbdir != NULL) 
+    {
+      char db_parent_dir[PATH_MAX];
+      strcpy(db_parent_dir, lo.upperdir);
+      strcat(db_parent_dir, lo.dbdir);
+      if (access(db_parent_dir, F_OK) != 0)
+        if (mkdir(db_parent_dir, 0744) != 0)
+          error(EXIT_FAILURE, errno, "failed to create xattr db dir");\
+      local_xattr_db_init(db_parent_dir);
+    }
   set_limits ();
   check_can_mknod (&lo);
-
   if (lo.debug)
     {
       fprintf (stderr, "uid=%s\n", lo.uid_str ? : "unchanged");
@@ -5650,7 +5663,7 @@ main (int argc, char *argv[])
           else
             error (EXIT_FAILURE, 0, "invalid value for xattr_permissions");
 
-          s = fgetxattr (get_upper_layer (&lo)->fd, name, data, sizeof (data));
+          s = ufgetxattr (get_upper_layer (&lo)->fd, name, data, sizeof (data));
           if (s < 0)
             {
               if (errno != ENODATA)
