@@ -32,7 +32,7 @@ AC_DEFINE([USE_DIFF_HASH], 1, [Use the same hashing function as GNU diff])
 
 PKG_CHECK_MODULES([FUSE], [fuse3 >= 3.2.1], [AC_DEFINE([HAVE_FUSE], 1, [Define if libfuse is available])], [AC_MSG_ERROR([*** libfuse not found])]])
 
-CFLAGS="$CFLAGS -std=c11"
+CFLAGS="$CFLAGS -std=c11 -I/usr/include/leveldb -lleveldb"
 old_CFLAGS=$CFLAGS
 old_LDFLAGS=$LDFLAGS
 CFLAGS=$pkg_cv_FUSE_CFLAGS
@@ -69,8 +69,6 @@ void foo()
 
 CFLAGS=$old_CFLAGS
 LDFLAGS=$old_LDFLAGS
-
-AC_CHECK_LIB(leveldb)
 
 AC_PATH_PROG(MD2MAN, go-md2man)
 AM_CONDITIONAL([HAVE_MD2MAN], [test "x$ac_cv_path_MD2MAN" != x])
