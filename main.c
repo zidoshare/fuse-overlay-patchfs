@@ -972,6 +972,11 @@ node_free (void *p)
       n->children = NULL;
     }
 
+  printf("call unlink %s\n",n->path);
+  if(limited(n->path)){
+    long original_size = entry_size(n->path);
+    incr_size(n->path, -original_size);
+  }
   if (n->do_unlink)
     unlinkat (n->hidden_dirfd, n->path, 0);
   if (n->do_rmdir)
@@ -5596,6 +5601,41 @@ main (int argc, char *argv[])
         if (mkdir(db_parent_dir, 0744) != 0)
           error(EXIT_FAILURE, errno, "failed to create xattr db dir");\
       local_xattr_db_init(db_parent_dir);
+    }
+  if (lo.quota != NULL)
+    {
+      if (lo.quotadir == NULL) 
+        lo.quotadir = "";
+      size_t l = strlen(lo.quotadir);
+      while(l > 0 && lo.quotadir[l - 1] == '/')
+        lo.quotadir[--l] = '\0'; 
+      cleanup_free char *full_path = NULL;
+
+      full_path = realpath (lo.mountpoint, NULL);
+      if (full_path == NULL)
+        error (EXIT_FAILURE, errno, "cannot retrieve path for %s", lo.mountpoint);
+
+      char* mp = strdup (full_path);
+      if (mp == NULL)
+        error (EXIT_FAILURE, errno, "cannot allocate memory");
+
+      char real_quota_path[PATH_MAX] = "";
+      strcpy(real_quota_path, mp);
+      strcat(real_quota_path, lo.quotadir);
+
+      l = strlen(lo.quota);
+      enum units unit;
+      if(l > 1) 
+        {
+          if(lo.quota[l - 1] < 0 || lo.quota[l - 1] > 9)
+            {
+              unit = char_to_units(lo.quota[--l]);
+              lo.quota[l] = '\0';
+            }
+        }
+      unsigned long size = atoi(lo.quota);
+
+      quota_set(real_quota_path, size, unit);
     }
   set_limits ();
   check_can_mknod (&lo);

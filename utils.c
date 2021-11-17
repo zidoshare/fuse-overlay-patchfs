@@ -481,7 +481,7 @@ ssize_t entry_size(const char *path) {
 ssize_t space(const char *path) {
     char fpath[PATH_MAX];
     if (realpath(path, fpath) == NULL)
-        return -1;
+        return 0;
     return entry_size(fpath);
 }
 static char GLOBAL_DB_PATH[PATH_MAX] = "";
@@ -607,7 +607,6 @@ get_db_key(unsigned long ino, const char* name, size_t* result_len)
 
     sprintf(prefix,"%ld",ino);
 
-  printf("getxattr ino = %ld\n",ino);
     size_t prefix_len = strlen(prefix);
     *result_len = (prefix_len + strlen(name) + 1);
     char* buf = (char*)malloc(sizeof(char) * ((*result_len) + 2));
