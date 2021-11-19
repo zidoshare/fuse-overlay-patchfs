@@ -354,13 +354,17 @@ unsigned long min(unsigned long l1, unsigned long l2) {
     return l1 < l2 ? l1 : l2;
 }
 
-int quota_set(const char *path, unsigned long size, enum units unit) {
+int quota_set(const char* basepath, const char *path, unsigned long size, enum units unit) {
     strcpy(global_path, path);
-    ssize_t space_of_path = space(path);
+    char real_quota_path[PATH_MAX] = "";
+    strcpy(real_quota_path, basepath);
+    strcat(real_quota_path, "/");
+    strcat(real_quota_path, path);
+    ssize_t space_of_path = space(real_quota_path);
     if (space_of_path == -1) {
         return -1;
     }
-    printf("space of %s: %ld\n", path, space_of_path);
+    printf("space of %s(%s): %ld\n", path, real_quota_path, space_of_path);
     global_quota = ATOMIC_VAR_INIT((size * unit) - space_of_path);
     printf("space initialzed!the remain size is [%ld]\n", global_quota);
     return 0;
@@ -381,21 +385,18 @@ long quota_exceeded(const char *path) {
     return 1;
 }
 
-long incr_size(const char *path, long s) {
-    if (limited(path)) {
-        long original_quota, result_quota;
-        do {
-            original_quota = global_quota;
-            result_quota = 0;
-            if (original_quota > s)
-                result_quota = original_quota - s;
-        } while (!atomic_compare_exchange_weak(&global_quota, &original_quota, result_quota));
+long incr_size(long s) {
+    long original_quota, result_quota;
+    do {
+        original_quota = global_quota;
+        result_quota = 0;
+        if (original_quota > s)
+            result_quota = original_quota - s;
+    } while (!atomic_compare_exchange_weak(&global_quota, &original_quota, result_quota));
 
-        printf("the oringinal quota is %ld, incr size is %ld,the result quota is %ld\n", original_quota, s,
-               global_quota);
-        return global_quota;
-    }
-    return LONG_MAX;
+    printf("the oringinal quota is %ld, incr size is %ld,the result quota is %ld\n", original_quota, s,
+            global_quota);
+    return global_quota;
 }
 
 

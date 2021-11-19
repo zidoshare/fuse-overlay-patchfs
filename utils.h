@@ -74,11 +74,11 @@ enum units {
 
 enum units char_to_units(const char c);
 
-int quota_set(const char *path, unsigned long size, enum units unit);
+int quota_set(const char* basepath, const char *path, unsigned long size, enum units unit);
 
 long double quota_get(const char *path, enum units unit);
 
-long incr_size(const char *path, long s);
+long incr_size(long s);
 
 long quota_exceeded(const char *path);
 

@@ -972,11 +972,10 @@ node_free (void *p)
       n->children = NULL;
     }
 
-  printf("call unlink %s\n",n->path);
-  if(limited(n->path)){
-    long original_size = entry_size(n->path);
-    incr_size(n->path, -original_size);
-  }
+  // if(limited(n->path)){
+  //   long original_size = entry_size(n->path);
+  //   incr_size(n->path, -original_size);
+  // }
   if (n->do_unlink)
     unlinkat (n->hidden_dirfd, n->path, 0);
   if (n->do_rmdir)
@@ -3088,6 +3087,9 @@ copyup (struct ovl_data *lo, struct ovl_node *node)
         goto exit;
     }
 
+  printf("copy up st_size path: %s, %s : %ld\n",node->parent->path,node->layer->path,st.st_size);
+  if(limited(node->parent->path))
+    incr_size(st.st_size);
   times[0] = st.st_atim;
   times[1] = st.st_mtim;
   ret = futimens (dfd, times);
@@ -3711,6 +3713,17 @@ ovl_write_buf (fuse_req_t req, fuse_ino_t ino,
 
   inode = lookup_inode (lo, ino);
 
+  ssize_t original_size = -1;
+
+  if(limited(inode->node->path)) {
+    char real_node_path[PATH_MAX] = "";
+    strcpy(real_node_path,lo->upperdir);
+    strcat(real_node_path,"/");
+    strcat(real_node_path,inode->node->path);
+    original_size = entry_size(real_node_path);
+    printf("the original_size = %d\n",original_size);
+  }
+
   errno = 0;
   res = fuse_buf_copy (&out_buf, in_buf, 0);
   saved_errno = errno;
@@ -3727,8 +3740,12 @@ ovl_write_buf (fuse_req_t req, fuse_ino_t ino,
 
   if (res < 0)
     fuse_reply_err (req, saved_errno);
-  else
+  else {
+    printf("the count of buf is %d,upperdir = %s, path = %s,name = %s\n", out_buf.buf[0].size, lo->upperdir, inode->node->path, inode->node->name);
+    if(original_size != -1)
+        incr_size(out_buf.buf[0].size + out_buf.buf[0].pos - original_size);
     fuse_reply_write (req, (size_t) res);
+  }
 }
 
 static void
@@ -5533,6 +5550,7 @@ main (int argc, char *argv[])
                         .timeout = 1000000000.0,
                         .timeout_str = NULL,
                         .writeback = 1,
+                        .quota = 0,
   };
   struct fuse_loop_config fuse_conf = {
                                        .clone_fd = 1,
@@ -5602,41 +5620,7 @@ main (int argc, char *argv[])
           error(EXIT_FAILURE, errno, "failed to create xattr db dir");\
       local_xattr_db_init(db_parent_dir);
     }
-  if (lo.quota != NULL)
-    {
-      if (lo.quotadir == NULL) 
-        lo.quotadir = "";
-      size_t l = strlen(lo.quotadir);
-      while(l > 0 && lo.quotadir[l - 1] == '/')
-        lo.quotadir[--l] = '\0'; 
-      cleanup_free char *full_path = NULL;
-
-      full_path = realpath (lo.mountpoint, NULL);
-      if (full_path == NULL)
-        error (EXIT_FAILURE, errno, "cannot retrieve path for %s", lo.mountpoint);
-
-      char* mp = strdup (full_path);
-      if (mp == NULL)
-        error (EXIT_FAILURE, errno, "cannot allocate memory");
-
-      char real_quota_path[PATH_MAX] = "";
-      strcpy(real_quota_path, mp);
-      strcat(real_quota_path, lo.quotadir);
-
-      l = strlen(lo.quota);
-      enum units unit;
-      if(l > 1) 
-        {
-          if(lo.quota[l - 1] < 0 || lo.quota[l - 1] > 9)
-            {
-              unit = char_to_units(lo.quota[--l]);
-              lo.quota[l] = '\0';
-            }
-        }
-      unsigned long size = atoi(lo.quota);
-
-      quota_set(real_quota_path, size, unit);
-    }
+  
   set_limits ();
   check_can_mknod (&lo);
   if (lo.debug)
@@ -5649,6 +5633,8 @@ main (int argc, char *argv[])
       fprintf (stderr, "mountpoint=%s\n", lo.mountpoint);
       fprintf (stderr, "plugins=%s\n", lo.plugins ? lo.plugins : "<none>");
       fprintf (stderr, "fsync=%s\n", lo.fsync ? "enabled" : "disabled");
+      fprintf (stderr, "xattr_store=%s\n",lo.dbdir ? lo.dbdir : "native");
+      fprintf (stderr, "quotadir=%s,quota=%s\n",lo.quota? lo.quotadir: "disabled",lo.quota);
     }
 
   lo.uid_mappings = lo.uid_str ? read_mappings (lo.uid_str) : NULL;
@@ -5788,6 +5774,44 @@ main (int argc, char *argv[])
       goto err_out3;
     }
   fuse_daemonize (opts.foreground);
+
+  if (lo.quota != NULL)
+    {
+      if (lo.quotadir == NULL) 
+        lo.quotadir = "";
+      
+      while(lo.quotadir[0] == '.' || lo.quotadir[0] == '/')
+        lo.quotadir++;
+      size_t l = strlen(lo.quotadir);
+      while(l > 0 && lo.quotadir[l - 1] == '/')
+        lo.quotadir[--l] = '\0';
+      cleanup_free char *full_path = NULL;
+
+      full_path = realpath (lo.upperdir, NULL);
+      if (full_path == NULL)
+        error (EXIT_FAILURE, errno, "cannot retrieve path for %s", lo.mountpoint);
+
+      char* mp = strdup (full_path);
+      if (mp == NULL)
+        error (EXIT_FAILURE, errno, "cannot allocate memory");
+
+      l = strlen(lo.quota);
+
+      char* quota = strdup(lo.quota);
+      enum units unit;
+      if(l > 1) 
+        {
+          if(quota[l - 1] < 0 || quota[l - 1] > 9)
+            {
+              unit = char_to_units(quota[--l]);
+              quota[l] = '\0';
+            }
+        }
+      unsigned long size = atoi(quota);
+
+      if( quota_set(mp, lo.quotadir, size, unit) < 0)
+        error(EXIT_FAILURE, errno, "cannot set quota [%s] to %s", lo.quota, lo.quotadir);
+    }
 
   if (lo.threaded)
     ret = fuse_session_loop_mt (se, &fuse_conf);
