@@ -385,6 +385,11 @@ long quota_exceeded(const char *path) {
     return 1;
 }
 
+atomic_long *get_global_quota() {
+  return &global_quota;
+}   
+
+// 增加文件夹容量 （减少 quota，也就是剩余可容纳的容量）
 long incr_size(long s) {
     long original_quota, result_quota;
     do {
@@ -394,8 +399,8 @@ long incr_size(long s) {
             result_quota = original_quota - s;
     } while (!atomic_compare_exchange_weak(&global_quota, &original_quota, result_quota));
 
-    printf("the oringinal quota is %ld, incr size is %ld,the result quota is %ld\n", original_quota, s,
-            global_quota);
+    // printf("the oringinal quota is %ld, incr size is %ld,the result quota is %ld\n", original_quota, s,
+    //         global_quota);
     return global_quota;
 }
 
@@ -408,7 +413,7 @@ void quota_unset(const char *path) {
 }
 
 int limited(const char *path) {
-    printf("global path is %s,target path is %s\n", global_path, path);
+    // printf("global path is %s,target path is %s\n", global_path, path);
     if (strncmp(path, global_path, strlen(global_path)) == 0)
         return 1;
     return 0;

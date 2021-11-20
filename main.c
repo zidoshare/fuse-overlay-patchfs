@@ -440,6 +440,11 @@ ovl_init (void *userdata, struct fuse_conn_info *conn)
     conn->want |= FUSE_CAP_WRITEBACK_CACHE;
 }
 
+static void ovl_destroy(void *userdata) 
+{
+  local_xattr_db_release();
+}
+
 static struct ovl_layer *
 get_first_layer (struct ovl_data *lo)
 {
@@ -971,12 +976,7 @@ node_free (void *p)
       hash_free (n->children);
       n->children = NULL;
     }
-
-  // if(limited(n->path)){
-  //   long original_size = entry_size(n->path);
-  //   incr_size(n->path, -original_size);
-  // }
-  if (n->do_unlink)
+  if (n->do_unlink) 
     unlinkat (n->hidden_dirfd, n->path, 0);
   if (n->do_rmdir)
     unlinkat (n->hidden_dirfd, n->path, AT_REMOVEDIR);
@@ -3087,7 +3087,7 @@ copyup (struct ovl_data *lo, struct ovl_node *node)
         goto exit;
     }
 
-  printf("copy up st_size path: %s, %s : %ld\n",node->parent->path,node->layer->path,st.st_size);
+  //TODO printf("copy up st_size path: %s, %s : %ld\n",node->parent->path,node->layer->path,st.st_size);
   if(limited(node->parent->path))
     incr_size(st.st_size);
   times[0] = st.st_atim;
@@ -3312,6 +3312,8 @@ do_rm (fuse_req_t req, fuse_ino_t parent, const char *name, bool dirp)
       return;
     }
 
+  char tmp_path[PATH_MAX];
+  strcpy(tmp_path, node->path);
   node_set_name (&key, (char *) name);
 
   rm = hash_delete (pnode->children, &key);
@@ -3323,7 +3325,12 @@ do_rm (fuse_req_t req, fuse_ino_t parent, const char *name, bool dirp)
           fuse_reply_err (req, errno);
           return;
         }
-
+      if (rm->do_unlink && limited(tmp_path))
+        {
+          struct stat buf;
+          if(fstatat(rm->hidden_dirfd, rm->path,&buf,AT_SYMLINK_NOFOLLOW) == 0)
+              incr_size(-buf.st_size);
+        }
       node_free (rm);
     }
 
@@ -3673,7 +3680,17 @@ ovl_do_open (fuse_req_t req, fuse_ino_t parent, const char *name, int flags, mod
         *retnode = n;
 
       l = n->layer;
-
+        if((flags & O_TRUNC) == O_TRUNC){
+        if(limited(n->path)) {
+          char real_path[PATH_MAX];
+          strcpy(real_path, get_upper_layer(lo)->path);
+          strcat(real_path, "/");
+          strcat(real_path, n->path);
+          struct stat buf;
+          if (lstat(real_path, &buf) == 0)
+            incr_size(-buf.st_size);
+        }
+      }
       return l->ds->openat (l, n->path, flags, mode);
     }
 }
@@ -3712,20 +3729,12 @@ ovl_write_buf (fuse_req_t req, fuse_ino_t ino,
 	     ino, out_buf.buf[0].size, (unsigned long) off, (int) fi->fh);
 
   inode = lookup_inode (lo, ino);
-
-  ssize_t original_size = -1;
-
-  if(limited(inode->node->path)) {
-    char real_node_path[PATH_MAX] = "";
-    strcpy(real_node_path,lo->upperdir);
-    strcat(real_node_path,"/");
-    strcat(real_node_path,inode->node->path);
-    original_size = entry_size(real_node_path);
-    printf("the original_size = %d\n",original_size);
-  }
-
   errno = 0;
-  res = fuse_buf_copy (&out_buf, in_buf, 0);
+
+  if(limited(inode->node->path))
+  {
+    res = INCR_IF_HAS_LEFT_SPACE(fi->fh, out_buf.buf[0].size, fuse_buf_copy (&out_buf, in_buf, 0));
+  }
   saved_errno = errno;
 
   /* if it is a writepage request, make sure to restore the setuid bit.  */
@@ -3737,13 +3746,9 @@ ovl_write_buf (fuse_req_t req, fuse_ino_t ino,
           return;
         }
     }
-
   if (res < 0)
     fuse_reply_err (req, saved_errno);
   else {
-    printf("the count of buf is %d,upperdir = %s, path = %s,name = %s\n", out_buf.buf[0].size, lo->upperdir, inode->node->path, inode->node->name);
-    if(original_size != -1)
-        incr_size(out_buf.buf[0].size + out_buf.buf[0].pos - original_size);
     fuse_reply_write (req, (size_t) res);
   }
 }
@@ -5374,6 +5379,7 @@ static struct fuse_lowlevel_ops ovl_oper =
    .fsyncdir = ovl_fsyncdir,
    .ioctl = ovl_ioctl,
    .fallocate = ovl_fallocate,
+   .destroy = ovl_destroy,
 #if HAVE_COPY_FILE_RANGE && HAVE_FUSE_COPY_FILE_RANGE
    .copy_file_range = ovl_copy_file_range,
 #endif

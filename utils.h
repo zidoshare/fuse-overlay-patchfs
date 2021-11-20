@@ -33,6 +33,7 @@
 # include <fcntl.h>
 # include "fuse-overlayfs.h"
 # include <sys/file.h>
+# include <stdatomic.h>
 
 # define XATTR_OVERRIDE_STAT "user.fuseoverlayfs.override_stat"
 # define XATTR_PRIVILEGED_OVERRIDE_STAT "security.fuseoverlayfs.override_stat"
@@ -75,6 +76,32 @@ enum units {
 enum units char_to_units(const char c);
 
 int quota_set(const char* basepath, const char *path, unsigned long size, enum units unit);
+
+#define INCR_IF_HAS_LEFT_SPACE(fd, diff, expression)                                                                                \
+  (__extension__(                                                                                                                   \
+      {                                                                                                                             \
+        long original_quota, result_quota;                                                                                          \
+        atomic_long *__global_quota = get_global_quota();                                                                           \
+        long int __result = -1;                                                                                                     \
+        long s = diff;                                                                                                              \
+        while (1)                                                                                                                   \
+        {                                                                                                                           \
+          original_quota = *__global_quota;                                                                                         \
+          if (original_quota > s)                                                                                                   \
+          {                                                                                                                         \
+            result_quota = original_quota - s;                                                                                      \
+            if (atomic_compare_exchange_weak(__global_quota, &original_quota, result_quota) && (__result = (long int)(expression))) \
+              goto __outer;                                                                                                         \
+          }                                                                                                                         \
+          if (*__global_quota == original_quota)                                                                                    \
+            break;                                                                                                                  \
+        }                                                                                                                           \
+        errno = ENOSPC;                                                                                                             \
+      __outer:                                                                                                                      \
+        __result;                                                                                                                   \
+      }))
+
+atomic_long *get_global_quota();
 
 long double quota_get(const char *path, enum units unit);
 
