@@ -55,7 +55,6 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/sysmacros.h>
-#include <sys/xattr.h>
 #include <linux/fs.h>
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -197,6 +196,12 @@ static const struct fuse_opt ovl_opts[] = {
    offsetof (struct ovl_data, upperdir), 0},
   {"workdir=%s",
    offsetof (struct ovl_data, workdir), 0},
+   {"xattrstore=%s",
+   offsetof (struct ovl_data, dbdir), 0},
+   {"quotadir=%s",
+   offsetof (struct ovl_data, quotadir), 0},
+   {"quota=%s",
+   offsetof (struct ovl_data, quota), 0},
   {"uidmapping=%s",
    offsetof (struct ovl_data, uid_str), 0},
   {"gidmapping=%s",
@@ -435,6 +440,11 @@ ovl_init (void *userdata, struct fuse_conn_info *conn)
     conn->want |= FUSE_CAP_WRITEBACK_CACHE;
 }
 
+static void ovl_destroy(void *userdata) 
+{
+  local_xattr_db_release();
+}
+
 static struct ovl_layer *
 get_first_layer (struct ovl_data *lo)
 {
@@ -531,9 +541,9 @@ write_permission_xattr (struct ovl_data *lo, int fd, const char *path, uid_t uid
 
   len = sprintf (buf, "%d:%d:%o", uid, gid, mode);
   if (fd >= 0)
-    return fsetxattr (fd, name, buf, len, 0);
+    return ufsetxattr (fd, name, buf, len, 0);
 
-  ret = lsetxattr (path, name, buf, len, 0);
+  ret = ulsetxattr (path, name, buf, len, 0);
   /* Ignore EPERM in unprivileged mode.  */
   if (ret < 0 && lo->xattr_permissions == 2 && errno == EPERM)
     return 0;
@@ -646,7 +656,7 @@ set_fd_origin (int fd, const char *origin)
   size_t len = strlen (origin) + 1;
   int ret;
 
-  ret = fsetxattr (fd, ORIGIN_XATTR, origin, len, 0);
+  ret = ufsetxattr (fd, ORIGIN_XATTR, origin, len, 0);
   if (ret < 0)
     {
       if (errno == ENOTSUP)
@@ -661,12 +671,12 @@ set_fd_opaque (int fd)
   cleanup_close int opq_whiteout_fd = -1;
   int ret;
 
-  ret = fsetxattr (fd, PRIVILEGED_OPAQUE_XATTR, "y", 1, 0);
+  ret = ufsetxattr (fd, PRIVILEGED_OPAQUE_XATTR, "y", 1, 0);
   if (ret < 0)
     {
       if (errno == ENOTSUP)
         goto create_opq_whiteout;
-      if (errno != EPERM || (fsetxattr (fd, OPAQUE_XATTR, "y", 1, 0) < 0 && errno != ENOTSUP))
+      if (errno != EPERM || (ufsetxattr (fd, OPAQUE_XATTR, "y", 1, 0) < 0 && errno != ENOTSUP))
           return -1;
     }
  create_opq_whiteout:
@@ -966,8 +976,7 @@ node_free (void *p)
       hash_free (n->children);
       n->children = NULL;
     }
-
-  if (n->do_unlink)
+  if (n->do_unlink) 
     unlinkat (n->hidden_dirfd, n->path, 0);
   if (n->do_rmdir)
     unlinkat (n->hidden_dirfd, n->path, AT_REMOVEDIR);
@@ -1379,7 +1388,7 @@ safe_read_xattr (char **ret, int sfd, const char *name, size_t initial_size)
     {
       char *tmp;
 
-      s = fgetxattr (sfd, name, buffer, current_size);
+      s = ufgetxattr (sfd, name, buffer, current_size);
       if (s >= 0 && s < current_size)
         break;
 
@@ -2558,7 +2567,7 @@ ovl_listxattr (fuse_req_t req, fuse_ino_t ino, size_t size)
     {
       char path[PATH_MAX];
       strconcat3 (path, PATH_MAX, lo->workdir, "/", node->path);
-      ret = listxattr (path, buf, size);
+      ret = ulistxattr (path, buf, size);
     }
   if (ret < 0)
     {
@@ -2622,7 +2631,7 @@ ovl_getxattr (fuse_req_t req, fuse_ino_t ino, const char *name, size_t size)
     {
       char path[PATH_MAX];
       strconcat3 (path, PATH_MAX, lo->workdir, "/", node->path);
-      ret = getxattr (path, name, buf, size);
+      ret = ugetxattr (path, name, buf, size);
     }
 
   if (ret < 0)
@@ -2661,7 +2670,7 @@ copy_xattr (int sfd, int dfd, char *buf, size_t buf_size)
 {
   ssize_t xattr_len;
 
-  xattr_len = flistxattr (sfd, buf, buf_size);
+  xattr_len = uflistxattr (sfd, buf, buf_size);
   if (xattr_len > 0)
     {
       char *it;
@@ -2677,7 +2686,7 @@ copy_xattr (int sfd, int dfd, char *buf, size_t buf_size)
           if (s < 0)
             return -1;
 
-          if (fsetxattr (dfd, it, v, s, 0) < 0)
+          if (ufsetxattr (dfd, it, v, s, 0) < 0)
             {
               if (errno == EINVAL || errno == EOPNOTSUPP)
                 continue;
@@ -3078,6 +3087,9 @@ copyup (struct ovl_data *lo, struct ovl_node *node)
         goto exit;
     }
 
+  //TODO printf("copy up st_size path: %s, %s : %ld\n",node->parent->path,node->layer->path,st.st_size);
+  if(limited(node->parent->path))
+    incr_size(st.st_size);
   times[0] = st.st_atim;
   times[1] = st.st_mtim;
   ret = futimens (dfd, times);
@@ -3300,6 +3312,8 @@ do_rm (fuse_req_t req, fuse_ino_t parent, const char *name, bool dirp)
       return;
     }
 
+  char tmp_path[PATH_MAX];
+  strcpy(tmp_path, node->path);
   node_set_name (&key, (char *) name);
 
   rm = hash_delete (pnode->children, &key);
@@ -3311,7 +3325,12 @@ do_rm (fuse_req_t req, fuse_ino_t parent, const char *name, bool dirp)
           fuse_reply_err (req, errno);
           return;
         }
-
+      if (rm->do_unlink && limited(tmp_path))
+        {
+          struct stat buf;
+          if(fstatat(rm->hidden_dirfd, rm->path,&buf,AT_SYMLINK_NOFOLLOW) == 0)
+              incr_size(-buf.st_size);
+        }
       node_free (rm);
     }
 
@@ -3351,9 +3370,9 @@ direct_setxattr (struct ovl_layer *l, const char *path, const char *name, const 
     return ret;
 
   if (fd >= 0)
-    return fsetxattr (fd, name, buf, size, flags);
+    return ufsetxattr (fd, name, buf, size, flags);
 
-  return setxattr (full_path, name, buf, size, flags);
+  return usetxattr (full_path, name, buf, size, flags);
 }
 
 static void
@@ -3401,7 +3420,7 @@ ovl_setxattr (fuse_req_t req, fuse_ino_t ino, const char *name,
     {
       char path[PATH_MAX];
       strconcat3 (path, PATH_MAX, lo->workdir, "/", node->path);
-      ret = setxattr (path, name, value, size, flags);
+      ret = usetxattr (path, name, value, size, flags);
     }
   if (ret < 0)
     {
@@ -3425,9 +3444,9 @@ direct_removexattr (struct ovl_layer *l, const char *path, const char *name)
     return ret;
 
   if (fd >= 0)
-    return fremovexattr (fd, name);
+    return ufremovexattr (fd, name);
 
-  return lremovexattr (full_path, name);
+  return ulremovexattr (full_path, name);
 }
 
 static void
@@ -3461,7 +3480,7 @@ ovl_removexattr (fuse_req_t req, fuse_ino_t ino, const char *name)
     {
       char path[PATH_MAX];
       strconcat3 (path, PATH_MAX, lo->workdir, "/", node->path);
-      ret = removexattr (path, name);
+      ret = uremovexattr (path, name);
     }
 
   if (ret < 0)
@@ -3661,7 +3680,17 @@ ovl_do_open (fuse_req_t req, fuse_ino_t parent, const char *name, int flags, mod
         *retnode = n;
 
       l = n->layer;
-
+        if((flags & O_TRUNC) == O_TRUNC){
+        if(limited(n->path)) {
+          char real_path[PATH_MAX];
+          strcpy(real_path, get_upper_layer(lo)->path);
+          strcat(real_path, "/");
+          strcat(real_path, n->path);
+          struct stat buf;
+          if (lstat(real_path, &buf) == 0)
+            incr_size(-buf.st_size);
+        }
+      }
       return l->ds->openat (l, n->path, flags, mode);
     }
 }
@@ -3700,9 +3729,12 @@ ovl_write_buf (fuse_req_t req, fuse_ino_t ino,
 	     ino, out_buf.buf[0].size, (unsigned long) off, (int) fi->fh);
 
   inode = lookup_inode (lo, ino);
-
   errno = 0;
-  res = fuse_buf_copy (&out_buf, in_buf, 0);
+
+  if(limited(inode->node->path))
+  {
+    res = INCR_IF_HAS_LEFT_SPACE(fi->fh, out_buf.buf[0].size, fuse_buf_copy (&out_buf, in_buf, 0));
+  }
   saved_errno = errno;
 
   /* if it is a writepage request, make sure to restore the setuid bit.  */
@@ -3714,11 +3746,11 @@ ovl_write_buf (fuse_req_t req, fuse_ino_t ino,
           return;
         }
     }
-
   if (res < 0)
     fuse_reply_err (req, saved_errno);
-  else
+  else {
     fuse_reply_write (req, (size_t) res);
+  }
 }
 
 static void
@@ -5347,6 +5379,7 @@ static struct fuse_lowlevel_ops ovl_oper =
    .fsyncdir = ovl_fsyncdir,
    .ioctl = ovl_ioctl,
    .fallocate = ovl_fallocate,
+   .destroy = ovl_destroy,
 #if HAVE_COPY_FILE_RANGE && HAVE_FUSE_COPY_FILE_RANGE
    .copy_file_range = ovl_copy_file_range,
 #endif
@@ -5523,6 +5556,7 @@ main (int argc, char *argv[])
                         .timeout = 1000000000.0,
                         .timeout_str = NULL,
                         .writeback = 1,
+                        .quota = 0,
   };
   struct fuse_loop_config fuse_conf = {
                                        .clone_fd = 1,
@@ -5582,10 +5616,19 @@ main (int argc, char *argv[])
       if (lo.upperdir == NULL)
         error (EXIT_FAILURE, errno, "cannot allocate memory");
     }
-
+  if (lo.dbdir != NULL) 
+    {
+      char db_parent_dir[PATH_MAX];
+      strcpy(db_parent_dir, lo.upperdir);
+      strcat(db_parent_dir, lo.dbdir);
+      if (access(db_parent_dir, F_OK) != 0)
+        if (mkdir(db_parent_dir, 0744) != 0)
+          error(EXIT_FAILURE, errno, "failed to create xattr db dir");\
+      local_xattr_db_init(db_parent_dir);
+    }
+  
   set_limits ();
   check_can_mknod (&lo);
-
   if (lo.debug)
     {
       fprintf (stderr, "uid=%s\n", lo.uid_str ? : "unchanged");
@@ -5596,6 +5639,8 @@ main (int argc, char *argv[])
       fprintf (stderr, "mountpoint=%s\n", lo.mountpoint);
       fprintf (stderr, "plugins=%s\n", lo.plugins ? lo.plugins : "<none>");
       fprintf (stderr, "fsync=%s\n", lo.fsync ? "enabled" : "disabled");
+      fprintf (stderr, "xattr_store=%s\n",lo.dbdir ? lo.dbdir : "native");
+      fprintf (stderr, "quotadir=%s,quota=%s\n",lo.quota? lo.quotadir: "disabled",lo.quota);
     }
 
   lo.uid_mappings = lo.uid_str ? read_mappings (lo.uid_str) : NULL;
@@ -5650,7 +5695,7 @@ main (int argc, char *argv[])
           else
             error (EXIT_FAILURE, 0, "invalid value for xattr_permissions");
 
-          s = fgetxattr (get_upper_layer (&lo)->fd, name, data, sizeof (data));
+          s = ufgetxattr (get_upper_layer (&lo)->fd, name, data, sizeof (data));
           if (s < 0)
             {
               if (errno != ENODATA)
@@ -5735,6 +5780,44 @@ main (int argc, char *argv[])
       goto err_out3;
     }
   fuse_daemonize (opts.foreground);
+
+  if (lo.quota != NULL)
+    {
+      if (lo.quotadir == NULL) 
+        lo.quotadir = "";
+      
+      while(lo.quotadir[0] == '.' || lo.quotadir[0] == '/')
+        lo.quotadir++;
+      size_t l = strlen(lo.quotadir);
+      while(l > 0 && lo.quotadir[l - 1] == '/')
+        lo.quotadir[--l] = '\0';
+      cleanup_free char *full_path = NULL;
+
+      full_path = realpath (lo.upperdir, NULL);
+      if (full_path == NULL)
+        error (EXIT_FAILURE, errno, "cannot retrieve path for %s", lo.mountpoint);
+
+      char* mp = strdup (full_path);
+      if (mp == NULL)
+        error (EXIT_FAILURE, errno, "cannot allocate memory");
+
+      l = strlen(lo.quota);
+
+      char* quota = strdup(lo.quota);
+      enum units unit;
+      if(l > 1) 
+        {
+          if(quota[l - 1] < 0 || quota[l - 1] > 9)
+            {
+              unit = char_to_units(quota[--l]);
+              quota[l] = '\0';
+            }
+        }
+      unsigned long size = atoi(quota);
+
+      if( quota_set(mp, lo.quotadir, size, unit) < 0)
+        error(EXIT_FAILURE, errno, "cannot set quota [%s] to %s", lo.quota, lo.quotadir);
+    }
 
   if (lo.threaded)
     ret = fuse_session_loop_mt (se, &fuse_conf);

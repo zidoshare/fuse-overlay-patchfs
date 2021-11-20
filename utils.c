@@ -280,13 +280,13 @@ override_mode (struct ovl_layer *l, int fd, const char *abs_path, const char *pa
 
   if (fd >= 0)
     {
-      ret = fgetxattr (fd, xattr_name, buf, sizeof (buf) - 1);
+      ret = ufgetxattr (fd, xattr_name, buf, sizeof (buf) - 1);
       if (ret < 0)
         return ret;
     }
   else if (abs_path)
     {
-      ret = lgetxattr (abs_path, xattr_name, buf, sizeof (buf) - 1);
+      ret = ulgetxattr (abs_path, xattr_name, buf, sizeof (buf) - 1);
       if (ret < 0)
         return ret;
     }
@@ -301,10 +301,10 @@ override_mode (struct ovl_layer *l, int fd, const char *abs_path, const char *pa
       fd = cleanup_fd;
 
       if (fd >= 0)
-        ret = fgetxattr (fd, xattr_name, buf, sizeof (buf) - 1);
+        ret = ufgetxattr (fd, xattr_name, buf, sizeof (buf) - 1);
       else
         {
-          ret = lgetxattr (full_path, xattr_name, buf, sizeof (buf) - 1);
+          ret = ulgetxattr (full_path, xattr_name, buf, sizeof (buf) - 1);
           if (ret < 0 && errno == ENODATA)
             return 0;
         }
@@ -354,13 +354,17 @@ unsigned long min(unsigned long l1, unsigned long l2) {
     return l1 < l2 ? l1 : l2;
 }
 
-int quota_set(const char *path, unsigned long size, enum units unit) {
+int quota_set(const char* basepath, const char *path, unsigned long size, enum units unit) {
     strcpy(global_path, path);
-    ssize_t space_of_path = space(path);
+    char real_quota_path[PATH_MAX] = "";
+    strcpy(real_quota_path, basepath);
+    strcat(real_quota_path, "/");
+    strcat(real_quota_path, path);
+    ssize_t space_of_path = space(real_quota_path);
     if (space_of_path == -1) {
         return -1;
     }
-    printf("space of %s: %ld\n", path, space_of_path);
+    printf("space of %s(%s): %ld\n", path, real_quota_path, space_of_path);
     global_quota = ATOMIC_VAR_INIT((size * unit) - space_of_path);
     printf("space initialzed!the remain size is [%ld]\n", global_quota);
     return 0;
@@ -381,21 +385,23 @@ long quota_exceeded(const char *path) {
     return 1;
 }
 
-long incr_size(const char *path, long s) {
-    if (limited(path)) {
-        long original_quota, result_quota;
-        do {
-            original_quota = global_quota;
-            result_quota = 0;
-            if (original_quota > s)
-                result_quota = original_quota - s;
-        } while (!atomic_compare_exchange_weak(&global_quota, &original_quota, result_quota));
+atomic_long *get_global_quota() {
+  return &global_quota;
+}   
 
-        printf("the oringinal quota is %ld, incr size is %ld,the result quota is %ld\n", original_quota, s,
-               global_quota);
-        return global_quota;
-    }
-    return LONG_MAX;
+// 增加文件夹容量 （减少 quota，也就是剩余可容纳的容量）
+long incr_size(long s) {
+    long original_quota, result_quota;
+    do {
+        original_quota = global_quota;
+        result_quota = 0;
+        if (original_quota > s)
+            result_quota = original_quota - s;
+    } while (!atomic_compare_exchange_weak(&global_quota, &original_quota, result_quota));
+
+    // printf("the oringinal quota is %ld, incr size is %ld,the result quota is %ld\n", original_quota, s,
+    //         global_quota);
+    return global_quota;
 }
 
 
@@ -407,7 +413,7 @@ void quota_unset(const char *path) {
 }
 
 int limited(const char *path) {
-    printf("global path is %s,target path is %s\n", global_path, path);
+    // printf("global path is %s,target path is %s\n", global_path, path);
     if (strncmp(path, global_path, strlen(global_path)) == 0)
         return 1;
     return 0;
@@ -447,11 +453,11 @@ ssize_t directory_size(const char *path) {
         if ((strcmp(ent->d_name, ".") == 0) || (strcmp(ent->d_name, "..") == 0))
             continue;
 
-        ssize_t entry_size = entry_size(ent->d_name);
-        if (entry_size == -1) {
+        ssize_t s = entry_size(ent->d_name);
+        if (s == -1) {
             return -1;
         }
-        size += entry_size;
+        size += s;
     }
 
     if (chdir("..") != 0)
@@ -481,10 +487,10 @@ ssize_t entry_size(const char *path) {
 ssize_t space(const char *path) {
     char fpath[PATH_MAX];
     if (realpath(path, fpath) == NULL)
-        return -1;
+        return 0;
     return entry_size(fpath);
 }
-static char GLOBAL_DB_PATH[PATH_MAX];
+static char GLOBAL_DB_PATH[PATH_MAX] = "";
 static char MOUNT_BASE_DIR[PATH_MAX];
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -535,10 +541,13 @@ mkdir_all(char* folder_path)
 }
 
 void
-local_xattr_db_init(const char* db_parent_dir, const char* mount_base_dir)
+local_xattr_db_init(const char* db_parent_dir)
 {
     strcpy(GLOBAL_DB_PATH, db_parent_dir);
-    strcpy(MOUNT_BASE_DIR, mount_base_dir);
+}
+
+int xattr_initialized(){
+  return GLOBAL_DB_PATH[0] == '\0' ? 0 : 1;
 }
 
 void
@@ -594,14 +603,23 @@ get_db()
     return DB;
 }
 
+
+// 通过 inode number 获取 key
 char*
-get_db_key(const char* path, const char* name, size_t* result_len)
+get_db_key(unsigned long ino, const char* name, size_t* result_len)
 {
-    size_t prefix_len = strlen(path);
+
+    char prefix[11];
+
+    sprintf(prefix,"%ld",ino);
+
+    size_t prefix_len = strlen(prefix);
     *result_len = (prefix_len + strlen(name) + 1);
     char* buf = (char*)malloc(sizeof(char) * ((*result_len) + 2));
-    strcpy(buf, path);
+
+    strcpy(buf, prefix);
     strcpy(buf + prefix_len + 1, name);
+
     return buf;
 }
 
@@ -615,26 +633,64 @@ unwrap_db_key(size_t path_len,
     return key + path_len + 1;
 }
 
-int flocal_set_xattr(int fd, const char *name,
-                     const void *value, size_t size, int flags){
-    char filePath[PATH_MAX];
-    if (fcntl(fd, F_GETPATH, filePath) != -1) {
-
+int ufsetxattr(int fd, const char *name,
+                  const void *value, size_t size, int flags){
+    if(!xattr_initialized()){
+      return fsetxattr(fd, name, value, size, flags);
     }
+    struct stat file_stat;  
+    int ret = fstat (fd, &file_stat);  
+    if (ret < 0) {  
+      return -1;
+    }
+    return local_set_xattr(file_stat.st_ino,name,value,size,flags);
 }
-int
-local_set_xattr(const char* path,
-                const char* name,
-                const char* value,
-                size_t size,
-                int flags)
+
+
+int ulsetxattr(const char* path,
+              const char* name,
+              const char* value,
+              size_t size,
+              int flags)
 {
+  if(!xattr_initialized()){
+      return lsetxattr(path, name, value, size, flags);
+  }
+  struct stat file_stat;  
+  int ret = lstat (path, &file_stat);
+  if (ret < 0) {
+    return -1;
+  }
+  return local_set_xattr(file_stat.st_ino,name,value,size,flags);
+}
+
+int usetxattr(const char* path,
+              const char* name,
+              const char* value,
+              size_t size,
+              int flags) {
+  if(!xattr_initialized()){
+      return setxattr(path, name, value, size, flags);
+  }
+  struct stat file_stat;
+  char fpath[PATH_MAX];
+  if(realpath(path,fpath) == NULL) {
+      return -1;
+  }
+  int ret = lstat (fpath, &file_stat);
+  if (ret < 0) {
+      return -1;
+  }
+  return local_set_xattr(file_stat.st_ino,name,value,size,flags);
+}
+
+int local_set_xattr(ino_t ino, const char *name, const void *value, size_t size, int flags) {
     leveldb_t* db = get_db();
     char* original_value;
     char* err = NULL;
 
     size_t name_len;
-    char* wrapped_name = get_db_key(path, name, &name_len);
+    char* wrapped_name = get_db_key(ino, name, &name_len);
 
     if (db != NULL) {
 
@@ -677,18 +733,20 @@ local_set_xattr(const char* path,
     free(wrapped_name);
 
     return -1;
+
 }
-int
-local_get_xattr(const char* path, const char* name, char* value, size_t size)
-{
-    leveldb_t* db = get_db();
+
+ssize_t local_get_xattr(ino_t ino, const char* name, char* value, size_t size){
+
+     leveldb_t* db = get_db();
+
     if (db == NULL) {
         errno = ENODATA;
         return -1;
     }
     char* err = NULL;
     size_t name_len;
-    char* wrapped_name = get_db_key(path, name, &name_len);
+    char* wrapped_name = get_db_key(ino, name, &name_len);
 
     size_t vallen;
     char* db_store_value =
@@ -721,26 +779,70 @@ local_get_xattr(const char* path, const char* name, char* value, size_t size)
     }
 
     leveldb_free(db_store_value);
-    return (int)vallen;
+    return vallen;
 }
 
-int
-local_list_xattr(const char* path, char* list, size_t size)
+ssize_t ufgetxattr(int fd, const char *name,
+                  void *value, size_t size) {
+  if(!xattr_initialized()){
+      return fgetxattr(fd, name, value, size);
+  }
+    struct stat file_stat;  
+    int ret = fstat (fd, &file_stat);  
+    if (ret < 0) {  
+      return -1;
+    }
+    return local_get_xattr(file_stat.st_ino,name,value,size);
+}
+ssize_t
+ulgetxattr(const char* path, const char* name, char* value, size_t size)
 {
+  if(!xattr_initialized()){
+      return lgetxattr(path, name, value, size);
+  }
+    struct stat file_stat;  
+    int ret = lstat (path, &file_stat);  
+    if (ret < 0) {  
+      return -1;
+    }
+    return local_get_xattr(file_stat.st_ino,name,value,size);
+}
+
+ssize_t
+ugetxattr(const char* path, const char* name, char* value, size_t size)
+{
+  if(!xattr_initialized()){
+      return getxattr(path, name, value, size);
+  }
+    struct stat file_stat;
+    char fpath[PATH_MAX];
+    if(realpath(path,fpath) == NULL) {
+        return -1;
+    }
+    int ret = lstat (fpath, &file_stat);
+    if (ret < 0) {
+        return -1;
+    }
+    return local_get_xattr(file_stat.st_ino,name,value,size);
+}
+
+size_t local_list_xattr(ino_t ino,char* list,size_t size) {
     leveldb_t* db = get_db();
     if (db == NULL) {
         return 0;
     }
-    size_t path_len = strlen(path);
+    char prefix[11];
+    sprintf("%s",prefix,ino);
+    size_t path_len = strlen(prefix);
 
     leveldb_iterator_t* iter = leveldb_create_iterator(db, roptions);
     if (size == 0) {
         size_t len = 0;
-        for (leveldb_iter_seek(iter, path, path_len); leveldb_iter_valid(iter);
+        for (leveldb_iter_seek(iter, prefix, path_len); leveldb_iter_valid(iter);
              leveldb_iter_next(iter)) {
             size_t vallen;
             const char* key = leveldb_iter_key(iter, &vallen);
-            if (strcmp(key, path) != 0)
+            if (strcmp(key, prefix) != 0)
                 break;
             size_t key_len;
             unwrap_db_key(path_len, key, vallen, &key_len);
@@ -751,7 +853,7 @@ local_list_xattr(const char* path, char* list, size_t size)
         return (int)len;
     }
     size_t len = 0;
-    for (leveldb_iter_seek(iter, path, path_len); leveldb_iter_valid(iter);
+    for (leveldb_iter_seek(iter, prefix, path_len); leveldb_iter_valid(iter);
          leveldb_iter_next(iter)) {
         if (size < len) {
             errno = ERANGE;
@@ -760,7 +862,7 @@ local_list_xattr(const char* path, char* list, size_t size)
         }
         size_t vallen;
         const char* key = leveldb_iter_key(iter, &vallen);
-        if (strcmp(key, path) != 0)
+        if (strcmp(key, prefix) != 0)
             break;
         size_t key_len;
         const char* result_key = unwrap_db_key(path_len, key, vallen, &key_len);
@@ -770,11 +872,52 @@ local_list_xattr(const char* path, char* list, size_t size)
     }
     leveldb_iter_destroy(iter);
 
-    return (int)len;
+    return len;
 }
-int
-local_remove_xattr(const char* path, const char* name)
+
+ssize_t uflistxattr(int fd, char *list, size_t size) {
+  if(!xattr_initialized()){
+      return flistxattr(fd, list, size);
+  }
+    struct stat file_stat;  
+    int ret = fstat (fd, &file_stat);  
+    if (ret < 0) {  
+      return -1;
+    }
+    return local_list_xattr(file_stat.st_ino, list, size);
+}
+
+ssize_t
+ullistxattr(const char* path, char* list, size_t size)
 {
+  if(!xattr_initialized()){
+      return llistxattr(path, list, size);
+  }
+    struct stat file_stat;  
+    int ret = lstat (path, &file_stat);  
+    if (ret < 0) {  
+      return -1;
+    }
+    return local_list_xattr(file_stat.st_ino, list, size);
+}
+
+ssize_t ulistxattr(const char* path, char* list, size_t size){
+  if(!xattr_initialized()){
+      return listxattr(path, list, size);
+  }
+    struct stat file_stat;
+    char fpath[PATH_MAX];
+    if(realpath(path,fpath) == NULL) {
+        return -1;
+    }
+    int ret = lstat (fpath, &file_stat);
+    if (ret < 0) {
+        return -1;
+    }
+    return local_list_xattr(file_stat.st_ino, list, size);
+}
+
+int local_remove_xattr(ino_t ino, const char* name) {
     leveldb_t* db = get_db();
     if (db == NULL) {
         errno = ENODATA;
@@ -784,7 +927,7 @@ local_remove_xattr(const char* path, const char* name)
     char* err = NULL;
 
     size_t name_len;
-    char* wrapped_name = get_db_key(path, name, &name_len);
+    char* wrapped_name = get_db_key(ino, name, &name_len);
     size_t vallen = 0;
     char* db_store_value =
             leveldb_get(db, roptions, wrapped_name, name_len, &vallen, &err);
@@ -813,4 +956,48 @@ local_remove_xattr(const char* path, const char* name)
     }
     free(wrapped_name);
     return 0;
+}
+
+int ufremovexattr(int fd, const char *name) {
+  if(!xattr_initialized()){
+      return fremovexattr(fd, name);
+  }
+    struct stat file_stat;  
+    int ret = fstat (fd, &file_stat);  
+    if (ret < 0) {  
+      return -1;
+    }
+    return local_remove_xattr(file_stat.st_ino, name);
+}
+
+int
+ulremovexattr(const char* path, const char* name)
+{
+  if(!xattr_initialized()){
+      return lremovexattr(path, name);
+  }
+    struct stat file_stat;  
+    int ret = lstat (path, &file_stat);  
+    if (ret < 0) {  
+      return -1;
+    }
+    return local_remove_xattr(file_stat.st_ino, name);
+}
+
+int
+uremovexattr(const char* path, const char* name)
+{
+  if(!xattr_initialized()){
+      return removexattr(path, name);
+  }
+    struct stat file_stat;
+    char fpath[PATH_MAX];
+    if(realpath(path,fpath) == NULL) {
+        return -1;
+    }
+    int ret = lstat (fpath, &file_stat);
+    if (ret < 0) {
+        return -1;
+    }
+    return local_remove_xattr(file_stat.st_ino, name);
 }

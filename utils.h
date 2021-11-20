@@ -32,6 +32,8 @@
 # include <sys/types.h>
 # include <fcntl.h>
 # include "fuse-overlayfs.h"
+# include <sys/file.h>
+# include <stdatomic.h>
 
 # define XATTR_OVERRIDE_STAT "user.fuseoverlayfs.override_stat"
 # define XATTR_PRIVILEGED_OVERRIDE_STAT "security.fuseoverlayfs.override_stat"
@@ -73,11 +75,37 @@ enum units {
 
 enum units char_to_units(const char c);
 
-int quota_set(const char *path, unsigned long size, enum units unit);
+int quota_set(const char* basepath, const char *path, unsigned long size, enum units unit);
+
+#define INCR_IF_HAS_LEFT_SPACE(fd, diff, expression)                                                                                \
+  (__extension__(                                                                                                                   \
+      {                                                                                                                             \
+        long original_quota, result_quota;                                                                                          \
+        atomic_long *__global_quota = get_global_quota();                                                                           \
+        long int __result = -1;                                                                                                     \
+        long s = diff;                                                                                                              \
+        while (1)                                                                                                                   \
+        {                                                                                                                           \
+          original_quota = *__global_quota;                                                                                         \
+          if (original_quota > s)                                                                                                   \
+          {                                                                                                                         \
+            result_quota = original_quota - s;                                                                                      \
+            if (atomic_compare_exchange_weak(__global_quota, &original_quota, result_quota) && (__result = (long int)(expression))) \
+              goto __outer;                                                                                                         \
+          }                                                                                                                         \
+          if (*__global_quota == original_quota)                                                                                    \
+            break;                                                                                                                  \
+        }                                                                                                                           \
+        errno = ENOSPC;                                                                                                             \
+      __outer:                                                                                                                      \
+        __result;                                                                                                                   \
+      }))
+
+atomic_long *get_global_quota();
 
 long double quota_get(const char *path, enum units unit);
 
-long incr_size(const char *path, long s);
+long incr_size(long s);
 
 long quota_exceeded(const char *path);
 
@@ -95,23 +123,46 @@ long entry_size(const char *path);
 ssize_t space(const char *path);
 
 // 初始化
-void
-local_xattr_db_init(const char* db_parent_path, const char* mount_base_dir);
+void local_xattr_db_init(const char* db_parent_path);
 
-void
-local_xattr_db_release();
+void local_xattr_db_release();
 
-int
-local_set_xattr(const char* path,
-                const char* name,
-                const char* value,
-                size_t size,
-                int flags);
-int
-local_get_xattr(const char* path, const char* name, char* value, size_t size);
-int
-local_list_xattr(const char* path, char* list, size_t size);
-int
-local_remove_xattr(const char* path, const char* name);
+
+int local_set_xattr(ino_t ino, const char *name, const void *value,
+	 size_t size, int flags);
+
+int ulsetxattr(const char* path,
+           const char* name,
+           const char* value,
+           size_t size,
+           int flags);
+
+int ufsetxattr(int fd, const char *name,
+                  const void *value, size_t size, int flags);
+
+int usetxattr(const char* path,
+           const char* name,
+           const char* value,
+           size_t size,
+           int flags);
+
+ssize_t ufgetxattr(int fd, const char *name,
+                  void *value, size_t size);
+
+ssize_t ulgetxattr(const char* path, const char* name, char* value, size_t size);
+
+ssize_t ugetxattr(const char* path, const char* name, char* value, size_t size);
+
+ssize_t uflistxattr(int fd, char *list, size_t size);
+
+ssize_t ullistxattr(const char* path, char* list, size_t size);
+
+ssize_t ulistxattr(const char* path, char* list, size_t size);
+
+int ufremovexattr(int fd, const char *name);
+
+int uremovexattr(const char* path, const char* name);
+
+int ulremovexattr(const char* path, const char* name);
 
 #endif

@@ -81,6 +81,9 @@ struct ovl_data
   char *workdir;
   char *redirect_dir;
   char *plugins;
+  char *dbdir;
+  char *quotadir;
+  char *quota;
   int workdir_fd;
   int debug;
   struct ovl_layer *layers;
