@@ -5618,13 +5618,13 @@ main (int argc, char *argv[])
     }
   if (lo.dbdir != NULL) 
     {
-      char db_parent_dir[PATH_MAX];
-      strcpy(db_parent_dir, lo.upperdir);
-      strcat(db_parent_dir, lo.dbdir);
-      if (access(db_parent_dir, F_OK) != 0)
-        if (mkdir(db_parent_dir, 0744) != 0)
-          error(EXIT_FAILURE, errno, "failed to create xattr db dir");\
-      local_xattr_db_init(db_parent_dir);
+      if (access(lo.dbdir, F_OK) != 0)
+        if (mkdir(lo.dbdir, 0744) != 0)
+          error(EXIT_FAILURE, errno, "failed to create xattr db dir");
+      lo.dbdir = realpath(lo.dbdir, NULL);
+      if (lo.dbdir == NULL)
+        error (EXIT_FAILURE, errno, "cannot retrieve path for %s", lo.dbdir);
+      local_xattr_db_init(lo.dbdir);
     }
   
   set_limits ();
