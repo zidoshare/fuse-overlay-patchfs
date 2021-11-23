@@ -5,6 +5,14 @@
         "file.h": "c",
         "features.h": "c",
         "utils.h": "c",
-        "config.h": "c"
+        "config.h": "c",
+        "array": "c",
+        "string_view": "c",
+        "initializer_list": "c",
+        "utility": "c",
+        "atomic": "c",
+        "memory_resource": "c",
+        "syslimits.h": "c",
+        "sendfile.h": "c"
     }
 }
