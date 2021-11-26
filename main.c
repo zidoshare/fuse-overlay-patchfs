@@ -3086,9 +3086,7 @@ copyup (struct ovl_data *lo, struct ovl_node *node)
       if (ret < 0)
         goto exit;
     }
-
-  //TODO printf("copy up st_size path: %s, %s : %ld\n",node->parent->path,node->layer->path,st.st_size);
-  if(limited(node->parent->path))
+  if(limited(node->path))
     incr_size(st.st_size);
   times[0] = st.st_atim;
   times[1] = st.st_mtim;
@@ -4365,6 +4363,8 @@ ovl_rename_exchange (fuse_req_t req, fuse_ino_t parent, const char *name,
   cleanup_close int destfd = -1;
   struct ovl_node *rm1, *rm2;
   char *tmp;
+
+  printf("\n\n\nexchange\n\n\n");
 
   node = do_lookup_file (lo, parent, name);
   if (node == NULL || node->whiteout)
