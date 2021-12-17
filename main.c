@@ -5779,8 +5779,6 @@ main (int argc, char *argv[])
       error (0, errno, "cannot mount");
       goto err_out3;
     }
-  fuse_daemonize (opts.foreground);
-
   if (lo.quota != NULL)
     {
       if (lo.quotadir == NULL) 
@@ -5818,6 +5816,8 @@ main (int argc, char *argv[])
       if( quota_set(mp, lo.quotadir, size, unit) < 0)
         error(EXIT_FAILURE, errno, "cannot set quota [%s] to %s", lo.quota, lo.quotadir);
     }
+
+  fuse_daemonize (opts.foreground);
 
   if (lo.threaded)
     ret = fuse_session_loop_mt (se, &fuse_conf);
